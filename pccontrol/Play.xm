@@ -94,16 +94,5 @@ BOOL isScriptPlaying()
 
 void playHasStoppedCallBack()
 {
-    if (CFAbsoluteTimeGetCurrent() - lastAlertBoxRequestTime() < 4.0) {
-        NSLog(@"com.zjx.springboard: skipping Script Finished popup because script recently showed an alert.");
-        return;
-    }
-
-    NSString *bundlePath = [scriptPlayer getCurrentBundlePath];
-    NSString *scriptName = (bundlePath.length > 0) ? [[bundlePath lastPathComponent] stringByDeletingPathExtension] : @"Unknown";
-    int completedRuns = [scriptPlayer getCompletedRuns];
-
-    NSString *msg = [NSString stringWithFormat:@"Script: %@\nSpeed: %.1f×\nPlayed: %d time(s)",
-                     scriptName, currentRunSpeed, completedRuns];
-    showAlertBox(@"Script Finished", msg, 0);
+    return;
 }
