@@ -39,5 +39,10 @@ int call_system(const char *cmd);
 int roundUp(int numToRound, int multiple);
 Boolean isIpad();
 NSString* getDeviceName();
+// Append one timestamped line to the daily script execution log
+// (/var/mobile/Library/ZXTouch/logs/script-YYYYMMDD.log). `event` is a short
+// tag such as START / END / ERROR / STOP. Files older than 3 days are purged
+// on every write, keeping a rolling 3-day window.
+void logScriptEvent(NSString *event, NSString *format, ...);
 
 #endif

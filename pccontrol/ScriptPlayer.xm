@@ -203,6 +203,7 @@ static NSString *ZXPythonModulePath(void)
     if (!scriptBundlePath)
     {
         NSLog(@"com.zjx.springboard: Unable to run the script. ScriptBundlePath not set.");
+        logScriptEvent(@"ERROR", @"cannot run script: bundle path not set");
         *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to run the script. ScriptBundlePath not set.\r\n"}];
         return -1;
     }
@@ -211,6 +212,7 @@ static NSString *ZXPythonModulePath(void)
     if (![[NSFileManager defaultManager] fileExistsAtPath:scriptBundlePath isDirectory:&isDir] || !isDir)
     {
         NSLog(@"com.zjx.springboard: Unable to run the script. Path not found or it is not a directory.");
+        logScriptEvent(@"ERROR", @"cannot run script '%@': path not found or not a directory", scriptBundlePath);
         *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to run the script. Path not found or it is not a directory.\r\n"}];
         return -1;
     }
@@ -220,6 +222,7 @@ static NSString *ZXPythonModulePath(void)
     if (![[NSFileManager defaultManager] fileExistsAtPath:infoFilePath isDirectory:&isDir])
     {
         NSLog(@"com.zjx.springboard: Unable to run the script. Info.plist not found.");
+        logScriptEvent(@"ERROR", @"cannot run script '%@': info.plist not found", scriptBundlePath);
         *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to run the script. Info.plist not found.\r\n"}];
         return -1;
     }
@@ -249,7 +252,9 @@ static NSString *ZXPythonModulePath(void)
 
     NSString *entryFilePath = [scriptBundlePath stringByAppendingPathComponent:entryFileName];
     NSLog(@"com.zjx.sprinboard: currently playing: %@. Repeat time: %d", entryFilePath, repeatTime);
-    
+    logScriptEvent(@"START", @"script: %@ | type: %@ | repeat: %d | speed: %.1f",
+                   scriptBundlePath, fileExtension.uppercaseString, repeatTime, speed);
+
 
     if ([fileExtension isEqualToString:@"raw"])
     {
@@ -257,7 +262,7 @@ static NSString *ZXPythonModulePath(void)
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
             NSError *err = nil;
             [self playFromRawFile:entryFilePath foregroundApp:foregroundApp err:&err];
-        }); 
+        });
     }
     else if ([fileExtension isEqualToString:@"py"])
     {
@@ -266,7 +271,13 @@ static NSString *ZXPythonModulePath(void)
             NSError *err = nil;
             [self playFromPythonFile:entryFilePath foregroundApp:foregroundApp err:&err];
         });
-        
+
+    }
+    else
+    {
+        // Neither branch above ran, so nothing will play and no END event
+        // would ever be logged. Record the failure so it is visible.
+        logScriptEvent(@"ERROR", @"cannot run script '%@': unsupported entry type '%@'", scriptBundlePath, fileExtension);
     }
 }
 
@@ -296,6 +307,7 @@ static NSString *ZXPythonModulePath(void)
 
     if (!file)
     {
+        logScriptEvent(@"ERROR", @"cannot open raw file: %@", filePath);
         showAlertBox(@"Error", [NSString stringWithFormat:@"Cannot play this script because zxtouch cannot open the file. File path: %@", filePath], 999);
         isPlaying = false;
         return;
@@ -338,6 +350,15 @@ static NSString *ZXPythonModulePath(void)
     }
     fclose(file);
 
+    if (stoppedByUser)
+    {
+        logScriptEvent(@"STOP", @"script stopped by user (raw): %@", scriptBundlePath);
+    }
+    else
+    {
+        logScriptEvent(@"END", @"script finished (raw): %@", scriptBundlePath);
+    }
+
     if (!stoppedByUser) [self playHasStopped];
 }
 
@@ -353,6 +374,7 @@ static NSString *ZXPythonModulePath(void)
     NSString *pythonPath = ZXPythonPath();
     if (!pythonPath)
     {
+        logScriptEvent(@"ERROR", @"python3 not found on device (script: %@)", scriptBundlePath);
         showAlertBox(@"Python not installed",
                      @"ZXTouch could not find a working python3 on this device.\n\nOpen Sileo and install the 'python3' package from Procursus, then reinstall ZXTouch so it can register the new interpreter.",
                      999);
@@ -362,6 +384,7 @@ static NSString *ZXPythonModulePath(void)
 
     if (![[NSFileManager defaultManager] fileExistsAtPath:filePath])
     {
+        logScriptEvent(@"ERROR", @"script file not found in bdl folder: %@", filePath);
         showAlertBox(@"Error", [NSString stringWithFormat:@"Cannot play this script. Script file not found in bdl folder. Script path: %@", filePath], 999);
         isPlaying = false;
         return;
@@ -426,6 +449,23 @@ static NSString *ZXPythonModulePath(void)
         NSLog(@"com.zjx.springboard: %@ — %@", title, message);
         showAlertBox(title, message, 999);
     }
+
+    if (stoppedByUser)
+    {
+        logScriptEvent(@"STOP", @"script stopped by user (py): %@", scriptBundlePath);
+    }
+    else if (pythonExitCode != 0)
+    {
+        // Traceback of the Python run is captured in outputLog — point the
+        // user at it so the execution log alone is enough to diagnose.
+        logScriptEvent(@"ERROR", @"script exited with code %d (py): %@ | output: %@",
+                       pythonExitCode, scriptBundlePath, outputLog);
+    }
+    else
+    {
+        logScriptEvent(@"END", @"script finished (py): %@", scriptBundlePath);
+    }
+
     if (!stoppedByUser) [self playHasStopped];
 }
 
