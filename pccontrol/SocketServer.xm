@@ -10,19 +10,12 @@
 CFSocketRef socketRef;
 static NSMutableDictionary *socketClients = NULL;       // readStream -> writeStream (wrapped in NSNumber)
 static NSMutableDictionary *socketClientBuffers = NULL; // readStream -> NSMutableData (incomplete command data)
+static NSMutableDictionary *socketClientQueues = NULL;  // readStream -> dispatch_queue_t (per-connection serial queue)
 
-// Commands are executed on a serial queue so that they keep their arrival order
-// and never race on the shared state inside processTask.
-static dispatch_queue_t socketTaskQueue = NULL;
-
-static dispatch_queue_t getSocketTaskQueue()
-{
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        socketTaskQueue = dispatch_queue_create("com.zjx.springboard.socket.taskqueue", DISPATCH_QUEUE_SERIAL);
-    });
-    return socketTaskQueue;
-}
+// Each connection gets its own serial queue. Commands from the same client
+// keep their arrival order, but a slow command (usleep, shell, OCR) on one
+// connection no longer blocks every other client — that was the behavior of
+// the original single-threaded runloop and of a global serial queue.
 
 /*
 Remove every resource of a client connection. Must only be called on the
@@ -36,10 +29,14 @@ static void closeClientConnection(CFReadStreamRef readStream)
 
     [socketClients removeObjectForKey:@((long)readStream)];
     [socketClientBuffers removeObjectForKey:@((long)readStream)];
+    [socketClientQueues removeObjectForKey:@((long)readStream)];
 
     CFWriteStreamRef writeStream = (CFWriteStreamRef)[clientNumber longValue];
     if (writeStream != NULL)
     {
+        // Both streams own the native socket (ShouldCloseNativeSocket); the
+        // second close hits an already-closed FD and harmlessly returns EBADF
+        // — no other FD can be opened in between on this same runloop thread.
         CFWriteStreamClose(writeStream);
         CFRelease(writeStream);
     }
@@ -86,6 +83,7 @@ void socketServer()
 
         socketClients = [[NSMutableDictionary alloc] init];
         socketClientBuffers = [[NSMutableDictionary alloc] init];
+        socketClientQueues = [[NSMutableDictionary alloc] init];
 
         NSLog(@"### com.zjx.springboard: connection waiting");
         CFRunLoopRef cfrunLoop = CFRunLoopGetCurrent();
@@ -164,7 +162,18 @@ static void readStream(CFReadStreamRef readStream, CFStreamEventType eventype, v
                 CFWriteStreamRef client = (clientNumber != nil) ? (CFWriteStreamRef)[clientNumber longValue] : NULL;
                 if (client != NULL) CFRetain(client); // keep the stream alive while the task is queued
 
-                dispatch_async(getSocketTaskQueue(), ^{
+                // Dispatch on this connection's own serial queue so command
+                // order is preserved per client without blocking others.
+                dispatch_queue_t clientQueue = [socketClientQueues objectForKey:@((long)readStream)];
+                if (clientQueue == nil)
+                {
+                    // Queue normally created at accept time; recreate lazily
+                    // in case the connection map was reset.
+                    clientQueue = dispatch_queue_create("com.zjx.springboard.socket.client", DISPATCH_QUEUE_SERIAL);
+                    [socketClientQueues setObject:clientQueue forKey:@((long)readStream)];
+                }
+
+                dispatch_async(clientQueue, ^{
                     @autoreleasepool {
                         processTask((UInt8*)command.mutableBytes, client);
                         if (client != NULL) CFRelease(client);
@@ -218,6 +227,15 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
         CFStreamCreatePairWithSocket(kCFAllocatorDefault, nativeSocketHandle, &newReadStream, &newWriteStream);
 
         if (newReadStream && newWriteStream) {
+            // Streams created from an existing native socket do NOT take
+            // ownership of the FD by default (kCFStreamPropertyShouldCloseNative-
+            // Socket is false), so closing the streams on disconnect used to
+            // leak the FD. Dashboard status queries open short connections in
+            // a loop, so this leaks for real. Transfer ownership to the
+            // streams so CFReadStreamClose/CFWriteStreamClose release the FD.
+            CFReadStreamSetProperty(newReadStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanTrue);
+            CFWriteStreamSetProperty(newWriteStream, kCFStreamPropertyShouldCloseNativeSocket, kCFBooleanTrue);
+
             CFReadStreamOpen(newReadStream);
             CFWriteStreamOpen(newWriteStream);
 
@@ -225,7 +243,7 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
 
             if (!CFReadStreamSetClient(newReadStream, kCFStreamEventHasBytesAvailable | kCFStreamEventErrorOccurred | kCFStreamEventEndEncountered, readStream, &context)) {
                 NSLog(@"### com.zjx.springboard: error 1");
-                CFReadStreamClose(newReadStream);
+                CFReadStreamClose(newReadStream); // closes the native socket too
                 CFRelease(newReadStream);
                 CFWriteStreamClose(newWriteStream);
                 CFRelease(newWriteStream);
@@ -234,13 +252,24 @@ static void TCPServerAcceptCallBack(CFSocketRef socket, CFSocketCallBackType typ
 
             CFReadStreamScheduleWithRunLoop(newReadStream, CFRunLoopGetCurrent(), kCFRunLoopCommonModes);
 
+            // One serial command queue per connection.
+            dispatch_queue_t clientQueue = dispatch_queue_create(
+                [[NSString stringWithFormat:@"com.zjx.springboard.socket.client.%d", nativeSocketHandle] UTF8String],
+                DISPATCH_QUEUE_SERIAL);
+
 			[socketClients setObject:@((long)newWriteStream) forKey:@((long)newReadStream)];
+            [socketClientQueues setObject:clientQueue forKey:@((long)newReadStream)];
             //const char *str = "+++welcome++++\n";
 
             //CFWriteStreamWrite(writeStreamRef, (UInt8 *)str, strlen(str) + 1);
         }
         else
         {
+            // Partial creation (one stream, or none): release whatever was
+            // created. Ownership was not transferred to the streams yet, so
+            // the native socket still has to be closed here.
+            if (newReadStream) { CFReadStreamClose(newReadStream); CFRelease(newReadStream); }
+            if (newWriteStream) { CFWriteStreamClose(newWriteStream); CFRelease(newWriteStream); }
             close(nativeSocketHandle);
         }
 

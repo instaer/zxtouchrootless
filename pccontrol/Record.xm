@@ -19,121 +19,141 @@ static CGFloat device_screen_height = 0;
 
 UIWindow *_recordIndicator;
 
+// Serializes recording start/stop: with per-connection command queues in
+// SocketServer, two clients (or a client and the volume-button handler) can
+// reach this code at the same time.
+static NSObject *recordStateLock(void)
+{
+    static NSObject *lock = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        lock = [[NSObject alloc] init];
+    });
+    return lock;
+}
+
 
 void startRecording(CFWriteStreamRef requestClient, NSError **error)
 {
-   if (isRecording)
-    {
-        NSLog(@"com.zjx.springboard: recording has already started.");
-        *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Recording has already started.\r\n"}];
-        return;
-    }
-
-    // get the screen size
-    device_screen_width = [Screen getScreenWidth];
-    device_screen_height = [Screen getScreenHeight];
-
-    if (device_screen_width == 0 || device_screen_width == 0)
-    {
-        *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to start recording. Cannot get screen size.\r\n"}];
-        showAlertBox(@"Error", @"Unable to start recording. Cannot get screen size.", 999);
-        return;
-    }
-    
-    NSError *err = nil;
-
-    // get current time, we use time as the name of the script package
-    NSDate * now = [NSDate date];
-    NSDateFormatter *outputFormatter = [[NSDateFormatter alloc] init];
-    [outputFormatter setDateFormat:@"yyMMddHHmmss"];
-    NSString *currentDateTime = [outputFormatter stringFromDate:now];
-
-    
-    // generate the script directory
-    NSString *scriptDirectory = [NSString stringWithFormat:@"%@/" RECORDING_FILE_FOLDER_NAME "/%@.bdl", getScriptsFolder(), currentDateTime];
-    [[NSFileManager defaultManager] createDirectoryAtPath:scriptDirectory withIntermediateDirectories:YES attributes:nil error:&err];
-    
-    if (err)
-    {
-        NSLog(@"com.zjx.springboard: create script recording folder error. Error: %@", err);
-        *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Create script recording folder error.\r\n"}];
-        showAlertBox(@"Error", [NSString stringWithFormat:@"Cannot create script. Error info: %@", err], 999);
-        return;
-    }
-
-    // get basic info of current device 
-    NSMutableDictionary *infoDict = [NSMutableDictionary dictionary];
-    [infoDict setObject:[NSString stringWithFormat:@"%@.raw", currentDateTime] forKey:@"Entry"];
-
-    // orientation
-    int orientation = [Screen getScreenOrientation];
-    [infoDict setObject:[@(orientation) stringValue] forKey:@"Orientation"];
-
-    // front most application
+    // getFrontMostApplication() may dispatch_sync to the main thread. Call it
+    // BEFORE taking the lock: a main-thread stopRecording holding the lock
+    // while we wait for the main thread would deadlock.
     SBApplication *frontMostApp = getFrontMostApplication();
 
-    if (frontMostApp == nil)
+    @synchronized(recordStateLock())
     {
-        //NSLog(@"com.zjx.springboard: foreground is springboard");
-        [infoDict setObject:@"com.apple.springboard" forKey:@"FrontApp"];
-    }
-    else
-    {
-        NSLog(@"com.zjx.springboard: bundle identifier of front most application: %@", frontMostApp);
-        [infoDict setObject:frontMostApp.bundleIdentifier forKey:@"FrontApp"]; //[frontMostApp displayIdentifier]
-    }
+        if (isRecording)
+        {
+            NSLog(@"com.zjx.springboard: recording has already started.");
+            *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Recording has already started.\r\n"}];
+            return;
+        }
 
-    // write to plist file in script directory
-    [infoDict writeToFile:[NSString stringWithFormat:@"%@/info.plist", scriptDirectory] atomically:YES];
+        // get the screen size
+        device_screen_width = [Screen getScreenWidth];
+        device_screen_height = [Screen getScreenHeight];
+
+        if (device_screen_width == 0 || device_screen_height == 0)
+        {
+            *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to start recording. Cannot get screen size.\r\n"}];
+            showAlertBox(@"Error", @"Unable to start recording. Cannot get screen size.", 999);
+            return;
+        }
+
+        NSError *err = nil;
+
+        // get current time, we use time as the name of the script package
+        NSDate * now = [NSDate date];
+        NSDateFormatter *outputFormatter = [[NSDateFormatter alloc] init];
+        [outputFormatter setDateFormat:@"yyMMddHHmmss"];
+        NSString *currentDateTime = [outputFormatter stringFromDate:now];
+
+        // generate the script directory
+        NSString *scriptDirectory = [NSString stringWithFormat:@"%@/" RECORDING_FILE_FOLDER_NAME "/%@.bdl", getScriptsFolder(), currentDateTime];
+        [[NSFileManager defaultManager] createDirectoryAtPath:scriptDirectory withIntermediateDirectories:YES attributes:nil error:&err];
+
+        if (err)
+        {
+            NSLog(@"com.zjx.springboard: create script recording folder error. Error: %@", err);
+            *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Create script recording folder error.\r\n"}];
+            showAlertBox(@"Error", [NSString stringWithFormat:@"Cannot create script. Error info: %@", err], 999);
+            return;
+        }
+
+        // get basic info of current device
+        NSMutableDictionary *infoDict = [NSMutableDictionary dictionary];
+        [infoDict setObject:[NSString stringWithFormat:@"%@.raw", currentDateTime] forKey:@"Entry"];
+
+        // orientation
+        int orientation = [Screen getScreenOrientation];
+        [infoDict setObject:[@(orientation) stringValue] forKey:@"Orientation"];
+
+        if (frontMostApp == nil)
+        {
+            //NSLog(@"com.zjx.springboard: foreground is springboard");
+            [infoDict setObject:@"com.apple.springboard" forKey:@"FrontApp"];
+        }
+        else
+        {
+            NSLog(@"com.zjx.springboard: bundle identifier of front most application: %@", frontMostApp);
+            [infoDict setObject:frontMostApp.bundleIdentifier forKey:@"FrontApp"]; //[frontMostApp displayIdentifier]
+        }
+
+        // write to plist file in script directory
+        [infoDict writeToFile:[NSString stringWithFormat:@"%@/info.plist", scriptDirectory] atomically:YES];
 
 
-    // generate a raw file for writing
-    NSString *rawFilePath = [NSString stringWithFormat:@"%@/%@.raw", scriptDirectory, currentDateTime];
-    [[NSFileManager defaultManager] createFileAtPath:rawFilePath contents:nil attributes:nil];
+        // generate a raw file for writing
+        NSString *rawFilePath = [NSString stringWithFormat:@"%@/%@.raw", scriptDirectory, currentDateTime];
+        [[NSFileManager defaultManager] createFileAtPath:rawFilePath contents:nil attributes:nil];
 
-    // Reply with the script path in the standard "status;;data" format. Reply
-    // here (not inside the block below) so the response is written before the
-    // recording runloop starts and never races with other queued writes.
-    notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", scriptDirectory] UTF8String], requestClient);
+        // Reply with the script path in the standard "status;;data" format. Reply
+        // here (not inside the block below) so the response is written before the
+        // recording runloop starts and never races with other queued writes.
+        notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", scriptDirectory] UTF8String], requestClient);
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-
-        // start recording
-        NSLog(@"com.zjx.springboard: start recording.");
-
+        // Mark recording started synchronously (moved out of the async block
+        // below) so a concurrent start request can't slip past the check above
+        // before the block has run.
         isRecording = true;
 
-        // show indicator
-        dispatch_async(dispatch_get_main_queue(), ^{
-            _recordIndicator = [[UIWindow alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
-            _recordIndicator.windowLevel = UIWindowLevelStatusBar;
-            _recordIndicator.hidden = NO;
-            [_recordIndicator setBackgroundColor:[UIColor clearColor]];
-            [_recordIndicator setUserInteractionEnabled:NO];
+        dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 
-            UIView *circleView = [[UIView alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
+            // start recording
+            NSLog(@"com.zjx.springboard: start recording.");
 
-            //circleView.alpha = 1;
-            circleView.layer.cornerRadius = 10;  // half the width/height
-            circleView.backgroundColor = [UIColor redColor];
-            [_recordIndicator addSubview:circleView];
+            // show indicator
+            dispatch_async(dispatch_get_main_queue(), ^{
+                _recordIndicator = [[UIWindow alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
+                _recordIndicator.windowLevel = UIWindowLevelStatusBar;
+                _recordIndicator.hidden = NO;
+                [_recordIndicator setBackgroundColor:[UIColor clearColor]];
+                [_recordIndicator setUserInteractionEnabled:NO];
+
+                UIView *circleView = [[UIView alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
+
+                //circleView.alpha = 1;
+                circleView.layer.cornerRadius = 10;  // half the width/height
+                circleView.backgroundColor = [UIColor redColor];
+                [_recordIndicator addSubview:circleView];
+            });
+
+            scriptRecordingFileHandle = [NSFileHandle fileHandleForWritingAtPath:rawFilePath];
+
+            // get time stamp
+            lastEventTimeStampForRecording = CFAbsoluteTimeGetCurrent();
+
+            // start watching function
+            ioHIDEventSystemForRecording = IOHIDEventSystemClientCreate(kCFAllocatorDefault);
+
+            IOHIDEventSystemClientScheduleWithRunLoop(ioHIDEventSystemForRecording, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+            IOHIDEventSystemClientRegisterEventCallback(ioHIDEventSystemForRecording, (IOHIDEventSystemClientEventCallback)recordIOHIDEventCallback, NULL, NULL);
+
+
+            recordRunLoop = CFRunLoopGetCurrent();
+            CFRunLoopRun();
         });
-
-        scriptRecordingFileHandle = [NSFileHandle fileHandleForWritingAtPath:rawFilePath];
-
-        // get time stamp
-        lastEventTimeStampForRecording = CFAbsoluteTimeGetCurrent();
-
-        // start watching function
-        ioHIDEventSystemForRecording = IOHIDEventSystemClientCreate(kCFAllocatorDefault);
-
-        IOHIDEventSystemClientScheduleWithRunLoop(ioHIDEventSystemForRecording, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
-        IOHIDEventSystemClientRegisterEventCallback(ioHIDEventSystemForRecording, (IOHIDEventSystemClientEventCallback)recordIOHIDEventCallback, NULL, NULL);
-        
-        
-        recordRunLoop = CFRunLoopGetCurrent();
-        CFRunLoopRun();
-    });
+    }
 }
 
 //TODO: multi-touch support! get touch index automatically, rather than set to 7.
@@ -211,36 +231,39 @@ void stopRecording()
 {
     NSLog(@"com.zjx.springboard: stop recording.");
 
-    // remove indicator
-    dispatch_async(dispatch_get_main_queue(), ^{
-        _recordIndicator.hidden = YES;
-        _recordIndicator = nil;
-    });
-
-    
-    if (ioHIDEventSystemForRecording)
+    @synchronized(recordStateLock())
     {
-        IOHIDEventSystemClientUnregisterEventCallback(ioHIDEventSystemForRecording);
-        IOHIDEventSystemClientUnscheduleWithRunLoop(ioHIDEventSystemForRecording, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+        // remove indicator
+        dispatch_async(dispatch_get_main_queue(), ^{
+            _recordIndicator.hidden = YES;
+            _recordIndicator = nil;
+        });
 
-        ioHIDEventSystemForRecording = NULL;
+
+        if (ioHIDEventSystemForRecording)
+        {
+            IOHIDEventSystemClientUnregisterEventCallback(ioHIDEventSystemForRecording);
+            IOHIDEventSystemClientUnscheduleWithRunLoop(ioHIDEventSystemForRecording, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+
+            ioHIDEventSystemForRecording = NULL;
+        }
+
+        if (scriptRecordingFileHandle)
+        {
+            [scriptRecordingFileHandle synchronizeFile];
+            [scriptRecordingFileHandle closeFile];
+
+            scriptRecordingFileHandle = nil;
+        }
+        if (recordRunLoop)
+        {
+            CFRunLoopStop(recordRunLoop);
+            recordRunLoop = NULL;
+        }
+
+        //set this at last
+        isRecording = false;
     }
-
-    if (scriptRecordingFileHandle)
-    {
-        [scriptRecordingFileHandle synchronizeFile];
-        [scriptRecordingFileHandle closeFile];
-
-        scriptRecordingFileHandle = nil;
-    }
-    if (recordRunLoop)
-    {
-        CFRunLoopStop(recordRunLoop);
-        recordRunLoop = NULL;
-    }
-
-    //set this at last
-    isRecording = false;
 }
 
 Boolean isRecordingStart()
