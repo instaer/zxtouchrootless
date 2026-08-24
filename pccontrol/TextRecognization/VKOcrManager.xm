@@ -75,9 +75,17 @@
             requestHandler = [[VNImageRequestHandler alloc] initWithCIImage:image options:nil];
         }
 
+        // The request retains the completion handler, which would retain self
+        // through the ivar accesses below — a retain cycle leaking the manager
+        // (and the full-screen CIImage it holds). Break it with a weak self.
+        // performRequests: runs the handler synchronously while a strong
+        // reference to self exists on the stack, so this is safe.
+        __weak VKOcrManager *weakSelf = self;
         request = [[VNRecognizeTextRequest alloc] initWithCompletionHandler:^(VNRequest *request, NSError *error){
-            requestResult = request;
-            errorResult = error;
+            VKOcrManager *strongSelf = weakSelf;
+            if (!strongSelf) return;
+            strongSelf->requestResult = request;
+            strongSelf->errorResult = error;
         }];
 
         // may cause crash
@@ -123,6 +131,7 @@ Return the string from a area
     {
         NSLog(@"com.zjx.springboard: error happened while performing ocr. %@", err);
         *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:[NSString stringWithFormat:@"-1;;Error happened while performing ocr. Error: %@\r\n", err]}];
+        inProgress = false;
         return nil;
     }
     

@@ -157,18 +157,33 @@ Perform touch events with data received from socket
 */
 void performTouchFromRawData(UInt8 *eventData)
 {
+    // validate event count before using it to index into the data array
+    int eventCount = getTouchCountFromDataArray(eventData);
+    if (eventCount < 0 || eventCount > 9)
+    {
+        NSLog(@"com.zjx.springboard: invalid touch event count: %d. Ignoring task.", eventCount);
+        return;
+    }
+
     // generate a parent event
-	IOHIDEventRef parent = IOHIDEventCreateDigitizerEvent(kCFAllocatorDefault, mach_absolute_time(), 3, 99, 1, 0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0); 
+	IOHIDEventRef parent = IOHIDEventCreateDigitizerEvent(kCFAllocatorDefault, mach_absolute_time(), 3, 99, 1, 0, 0, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0, 0, 0);
     IOHIDEventSetIntegerValue(parent , 0xb0019, 1); //set flags of parent event   flags: 0x20001 -> 0xa0001
     IOHIDEventSetIntegerValue(parent , 0x4, 1); //set flags of parent event   flags: 0xa0001 -> 0xa0011
 
-    for (int i = 0; i < getTouchCountFromDataArray(eventData); i++)
+    for (int i = 0; i < eventCount; i++)
     {
         //NSLog(@"### com.zjx.springboard: get data. index: %d. type: %d. touchIndex: %d. x: %f. y: %f", i, getTouchTypeFromDataArray(eventData, i), getTouchIndexFromDataArray(eventData, i), getTouchXFromDataArray(eventData, i), getTouchYFromDataArray(eventData, i));
         int touchType = getTouchTypeFromDataArray(eventData, i);
         int x = getTouchXFromDataArray(eventData, i);
         int y = getTouchYFromDataArray(eventData, i);
         int index = getTouchIndexFromDataArray(eventData, i);
+
+        // validate finger index to prevent out-of-bounds writes into eventsToAppend
+        if (index < 0 || index >= MAX_FINGER_INDEX)
+        {
+            NSLog(@"com.zjx.springboard: touch finger index %d out of range (0-%d). Ignoring event %d.", index, MAX_FINGER_INDEX - 1, i);
+            continue;
+        }
 
         appendChildEvent(parent, touchType, index, x, y); // append child event to parent
 

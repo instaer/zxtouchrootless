@@ -152,6 +152,10 @@ static NSString *ZXDashboardIPAddress(void)
         close(socketHandle);
         return @"-1;;ZXTouch service is unavailable.";
     }
+    // Commands must be terminated with "\r\n"; every caller passes a bare task string
+    if (![command hasSuffix:@"\r\n"]) {
+        command = [command stringByAppendingString:@"\r\n"];
+    }
     const char *message = command.UTF8String;
     if (send(socketHandle, message, strlen(message), 0) < 0) {
         self.lastError = @"Unable to send a command to the local ZXTouch service.";

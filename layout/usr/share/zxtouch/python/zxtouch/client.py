@@ -22,8 +22,8 @@ class zxtouch:
         :param y: y coordinate
         :return: None
         """
-        if int(type) > 19:
-            print("Touch index should not be greater than 19.")
+        if int(finger_index) < 0 or int(finger_index) > 19:
+            raise ValueError("Touch finger index should be between 0 and 19.")
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_PERFORM_TOUCH,
                                                    '1{}{:02d}{:05d}{:05d}'.format(type, finger_index, int(x * 10),
                                                                                   int(y * 10))))
@@ -35,11 +35,15 @@ class zxtouch:
         :param touch_list: [{"type": ?, "finger_index": ?, "x": ?, "y": ?}]
         :return: None
         """
+        if len(touch_list) > 9:
+            raise ValueError("touch_list should contain at most 9 events.")
         event_data = ''
         for touch_event in touch_list:
+            if int(touch_event['finger_index']) < 0 or int(touch_event['finger_index']) > 19:
+                raise ValueError("Touch finger index should be between 0 and 19.")
             event_data += '{}{:02d}{:05d}{:05d}'.format(touch_event['type'], touch_event['finger_index'],
-                                                        touch_event['x'] * 10,
-                                                        touch_event['y'] * 10)
+                                                        int(touch_event['x'] * 10),
+                                                        int(touch_event['y'] * 10))
         self.s.send(datahandler.format_socket_data(tasktypes.TASK_PERFORM_TOUCH, str(len(touch_list)) + event_data))
 
     def switch_to_app(self, bundle_identifier):

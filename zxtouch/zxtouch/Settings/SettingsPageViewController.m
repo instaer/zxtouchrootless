@@ -292,7 +292,7 @@ static UIImage *ZXSettingsSymbol(NSString *name) {
     
     Socket *socket = [[Socket alloc] init];
     [socket connect:@"127.0.0.1" byPort:6000];
-    [socket send:@"902"];
+    [socket send:@"902\r\n"];
     [socket recv:1024];
     [socket close];
 }
@@ -310,7 +310,7 @@ static UIImage *ZXSettingsSymbol(NSString *name) {
     }
     Socket *socket = [[Socket alloc] init];
     [socket connect:@"127.0.0.1" byPort:6000];
-    [socket send:@"901"];
+    [socket send:@"901\r\n"];
     [socket recv:1024];
     [socket close];
 }
@@ -537,7 +537,7 @@ static UIImage *ZXSettingsSymbol(NSString *name) {
     // Notify SpringBoard to apply dark mode to the panel (command 903)
     Socket *socket = [[Socket alloc] init];
     [socket connect:@"127.0.0.1" byPort:6000];
-    [socket send:@"903"];
+    [socket send:@"903\r\n"];
     [socket recv:1024];
     [socket close];
 }

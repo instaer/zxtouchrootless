@@ -115,15 +115,12 @@ void processTask(UInt8 *buff, CFWriteStreamRef writeStreamRef)
     {
         @autoreleasepool {
             NSError *err = nil;
-            startRecording(writeStreamRef, &err);    
+            startRecording(writeStreamRef, &err);
             if (err)
             {
                 notifyClient((UInt8*)[[err localizedDescription] UTF8String], writeStreamRef);
             }
-            else
-            {
-                notifyClient((UInt8*)"0\r\n", writeStreamRef);
-            }
+            // On success startRecording itself replies with "0;;<script path>\r\n".
         }
     }
     else if (taskType == TASK_TOUCH_RECORDING_STOP)

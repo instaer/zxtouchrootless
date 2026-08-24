@@ -91,12 +91,15 @@ void startRecording(CFWriteStreamRef requestClient, NSError **error)
     NSString *rawFilePath = [NSString stringWithFormat:@"%@/%@.raw", scriptDirectory, currentDateTime];
     [[NSFileManager defaultManager] createFileAtPath:rawFilePath contents:nil attributes:nil];
 
+    // Reply with the script path in the standard "status;;data" format. Reply
+    // here (not inside the block below) so the response is written before the
+    // recording runloop starts and never races with other queued writes.
+    notifyClient((UInt8*)[[NSString stringWithFormat:@"0;;%@\r\n", scriptDirectory] UTF8String], requestClient);
+
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
 
         // start recording
         NSLog(@"com.zjx.springboard: start recording.");
-        
-        notifyClient((UInt8*)[scriptDirectory UTF8String], requestClient);
 
         isRecording = true;
 

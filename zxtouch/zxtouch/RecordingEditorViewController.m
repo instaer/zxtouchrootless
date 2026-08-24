@@ -163,7 +163,7 @@
         [self showError:@"ZXTouch service is unavailable."];
         return;
     }
-    [socket send:[@"19" stringByAppendingString:self.scriptBundlePath]];
+    [socket send:[NSString stringWithFormat:@"19%@\r\n", self.scriptBundlePath]];
     NSString *result = [socket recv:1024];
     [socket close];
     if (![result hasPrefix:@"0"]) [self showError:result.length ? result : @"Unable to play this recording."];
