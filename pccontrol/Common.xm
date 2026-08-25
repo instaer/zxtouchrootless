@@ -6,6 +6,7 @@
 #include <spawn.h>
 #include <errno.h>
 #include <string.h>
+#include <stdarg.h>
 
 int call_system(const char *cmd)
 {
@@ -121,6 +122,91 @@ NSString *getConfigFilePath()
 NSString *getCommonConfigFilePath()
 {
     return [getConfigFilePath() stringByAppendingPathComponent:@COMMON_CONFIG_NAME];
+}
+
+/*
+Script execution log helpers.
+
+One log file per day under <document root>/logs (script-YYYYMMDD.log). Files
+older than SCRIPT_LOG_RETENTION_DAYS are purged on every write, so the folder
+is a rolling window and never grows without bound.
+*/
+#define SCRIPT_LOG_RETENTION_DAYS 3
+#define SCRIPT_LOG_FILE_PREFIX @"script-"
+
+static dispatch_queue_t getScriptLogQueue(void)
+{
+    // Scripts can be started from several threads at once (socket task
+    // queue, popup, replay timer). A serial queue keeps lines from
+    // interleaving inside the log file.
+    static dispatch_queue_t queue = NULL;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create("com.zjx.springboard.scriptlog", DISPATCH_QUEUE_SERIAL);
+    });
+    return queue;
+}
+
+static void purgeExpiredScriptLogs(NSString *logsFolder)
+{
+    // Log files are named script-YYYYMMDD.log; delete any whose date falls
+    // before the retention cutoff. Unrecognized files are left untouched.
+    NSDateFormatter *dayFormatter = [[NSDateFormatter alloc] init];
+    [dayFormatter setLocale:[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"]];
+    [dayFormatter setDateFormat:@"yyyyMMdd"];
+
+    NSDate *cutoff = [NSDate dateWithTimeIntervalSinceNow:-SCRIPT_LOG_RETENTION_DAYS * 24 * 60 * 60];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *file in [fm contentsOfDirectoryAtPath:logsFolder error:nil])
+    {
+        if (![file hasPrefix:SCRIPT_LOG_FILE_PREFIX] || ![[file pathExtension] isEqualToString:@"log"])
+            continue;
+        NSString *datePart = [[file stringByDeletingPathExtension]
+            substringFromIndex:[SCRIPT_LOG_FILE_PREFIX length]];
+        NSDate *fileDate = [dayFormatter dateFromString:datePart];
+        if (fileDate && [fileDate compare:cutoff] == NSOrderedAscending)
+            [fm removeItemAtPath:[logsFolder stringByAppendingPathComponent:file] error:nil];
+    }
+}
+
+void logScriptEvent(NSString *event, NSString *format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    NSString *detail = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+
+    dispatch_async(getScriptLogQueue(), ^{
+        NSDate *now = [NSDate date];
+
+        NSDateFormatter *dayFormatter = [[NSDateFormatter alloc] init];
+        [dayFormatter setLocale:[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"]];
+        [dayFormatter setDateFormat:@"yyyyMMdd"];
+        NSDateFormatter *timeFormatter = [[NSDateFormatter alloc] init];
+        [timeFormatter setLocale:[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"]];
+        [timeFormatter setDateFormat:@"yyyy-MM-dd HH:mm:ss"];
+
+        NSString *logsFolder = [getDocumentRoot() stringByAppendingPathComponent:@"logs"];
+        NSFileManager *fm = [NSFileManager defaultManager];
+        [fm createDirectoryAtPath:logsFolder withIntermediateDirectories:YES attributes:nil error:nil];
+        purgeExpiredScriptLogs(logsFolder);
+
+        NSString *logFile = [logsFolder stringByAppendingPathComponent:
+            [NSString stringWithFormat:@"%@%@.log", SCRIPT_LOG_FILE_PREFIX, [dayFormatter stringFromDate:now]]];
+        NSString *line = [NSString stringWithFormat:@"%@ [%@] %@\n",
+                          [timeFormatter stringFromDate:now], event, detail];
+
+        // Create the file on first write of the day, then append.
+        NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:logFile];
+        if (!handle)
+        {
+            [@"" writeToFile:logFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            handle = [NSFileHandle fileHandleForWritingAtPath:logFile];
+        }
+        [handle seekToEndOfFile];
+        [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle closeFile];
+    });
 }
 
 void swapCGFloat(CGFloat *a, CGFloat *b)

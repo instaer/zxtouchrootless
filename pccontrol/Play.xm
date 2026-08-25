@@ -68,15 +68,23 @@ int playScriptWithSettings(UInt8* path, int repeatTime, float playSpeed, float s
         return -1;
     }
     if (playSpeed <= 0) playSpeed = 1.0f;
-    currentRunSpeed = playSpeed;
 
-    [scriptPlayer setPath:[NSString stringWithFormat:@"%s", path]];
-    [scriptPlayer setRepeatTime:repeatTime];
-    [scriptPlayer setSpeed:playSpeed];
-    [scriptPlayer setInterval:sleepBetweenRun];
-    [scriptPlayer setSwitchApp:switchAppBeforeRunScript];
+    // Commands from different clients can now run concurrently (per-
+    // connection queues in SocketServer). Serialize configure+start and
+    // stop against each other so one client can't start a script while
+    // another's settings are half-applied.
+    @synchronized(scriptPlayer)
+    {
+        currentRunSpeed = playSpeed;
 
-    [scriptPlayer play:error];
+        [scriptPlayer setPath:[NSString stringWithFormat:@"%s", path]];
+        [scriptPlayer setRepeatTime:repeatTime];
+        [scriptPlayer setSpeed:playSpeed];
+        [scriptPlayer setInterval:sleepBetweenRun];
+        [scriptPlayer setSwitchApp:switchAppBeforeRunScript];
+
+        [scriptPlayer play:error];
+    }
 
     return 0;
 }
@@ -84,7 +92,10 @@ int playScriptWithSettings(UInt8* path, int repeatTime, float playSpeed, float s
 
 void stopScriptPlaying(NSError **error)
 {
-    [scriptPlayer forceStop:error];
+    @synchronized(scriptPlayer)
+    {
+        [scriptPlayer forceStop:error];
+    }
 }
 
 BOOL isScriptPlaying()

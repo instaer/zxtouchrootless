@@ -132,15 +132,27 @@ int playBackFromRawFile()
         NSLog(@"com.zjx.zxtouchb: please specify the raw file path.");
         return 0;
     }
-    
+
     int sbSocket = getSpringboardSocket();
-    
+    if (sbSocket < 0)
+    {
+        NSLog(@"com.zjx.zxtouchb: cannot connect to springboard, aborting playback.");
+        return -1;
+    }
+
     FILE *file = fopen([parameterArr[2] UTF8String], "r");
-    
+    if (file == NULL)
+    {
+        NSLog(@"com.zjx.zxtouchb: cannot open raw file: %s", [parameterArr[2] UTF8String]);
+        close(sbSocket);
+        return -1;
+    }
+
     char buffer[256];
+    char sendBuffer[280];
     int taskType;
     int sleepTime;
-    
+
     while (fgets(buffer, sizeof(char)*256, file) != NULL){
         //NSLog(@"sleep: %s",buffer);
 
@@ -152,8 +164,19 @@ int playBackFromRawFile()
         }
         else
         {
-            send(sbSocket , buffer, strlen(buffer) , 0);
+            // strip the trailing newline and send with the "\r\n" terminator
+            // expected by the SpringBoard socket server
+            size_t len = strlen(buffer);
+            while (len > 0 && (buffer[len-1] == '\n' || buffer[len-1] == '\r')) buffer[--len] = '\0';
+            if (len == 0) continue;
+
+            snprintf(sendBuffer, sizeof(sendBuffer), "%s\r\n", buffer);
+            send(sbSocket , sendBuffer, strlen(sendBuffer) , 0);
         }
     }
+
+    fclose(file);
+    close(sbSocket);
+    return 0;
 }
 

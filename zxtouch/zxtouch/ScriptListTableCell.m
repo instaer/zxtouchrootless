@@ -62,7 +62,7 @@
     Socket *springBoardSocket = [[Socket alloc] init];
     [springBoardSocket connect:@"127.0.0.1" byPort:6000];
     
-    [springBoardSocket send:[NSString stringWithFormat:@"19%@", filePath]];
+    [springBoardSocket send:[NSString stringWithFormat:@"19%@\r\n", filePath]];
     NSString* result = [springBoardSocket recv:1024];
     if ([result characterAtIndex:0] != '0')
     {
