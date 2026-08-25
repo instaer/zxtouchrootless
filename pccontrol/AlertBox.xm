@@ -4,7 +4,7 @@
 #import <UIKit/UIKit.h>
 
 // Dedicated window for hosting alert controllers (survives until dismissed)
-static NSMutableArray *_alert_windows = nil;
+static NSMutableArray *_alertWindows = nil;
 
 static void appendPromptDebugLog(NSString *message)
 {
