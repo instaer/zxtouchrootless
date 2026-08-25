@@ -30,6 +30,8 @@ This fork has been actively revived for modern rootless jailbreaks. Recent relea
 - Package installs now finish before respringing, preventing interrupted dpkg transactions in Sileo
 - Touch Indicator now follows each app's exact supported orientation mask, including landscape-only apps
 - Stopping a Python script now terminates its complete process group without leaving a runaway shell or logger
+- Script execution logging — every script start/stop/error is written to daily rolling logs under `/var/mobile/Library/ZXTouch/logs/` (3-day retention)
+- Major stability fixes: socket command framing (TCP packet merging/splitting), connection FD leaks, start/stop race conditions in recording and playback, memory-safety bounds checks on touch events
 
 The built-in automation system currently supports assigning actions to Volume Up, Volume Down, and Home button click patterns. Each trigger can use 1-5 clicks and can run one of these actions:
 
@@ -74,6 +76,8 @@ The built-in automation system currently supports assigning actions to Volume Up
 - **Modern dashboard workspaces** - focused Scripts, Assets, Logs, and Device views with responsive phone and desktop layouts
 - **Orientation-aware Touch Indicator** - stays within the foreground app's supported portrait or landscape orientations and maps both landscape directions correctly
 - **Reliable script stopping** - tracks each Python run as a process group and stops its interpreter, shell, logger, and child processes together
+- **Script execution logs** - every play (raw or Python) is logged with start/stop/error events, script path, type, repeat count, and speed; files roll daily and are kept for 3 days under `/var/mobile/Library/ZXTouch/logs/`
+- **Hardened socket server and clients** - proper `\r\n` command framing fixes commands lost to TCP packet merging; per-connection queues keep one slow client from blocking others; leak-free connection handling for long-running sessions; the Python client now takes a configurable timeout instead of hanging forever on an unresponsive device
 
 ---
 
@@ -230,6 +234,28 @@ Open **Settings → Automation** in the app to assign actions to button click pa
 
 Each trigger can be set to 1-5 clicks and can run Smart Toggle, Toggle Panel, Stop Script, Toggle Recording, or a selected `.bdl` script.
 
+### Script Execution Logs
+
+Every script run (from the app, the panel, the dashboard, the socket API, or an automation trigger) is logged to a daily file:
+
+```text
+/var/mobile/Library/ZXTouch/logs/script-YYYYMMDD.log
+```
+
+Each line carries a timestamp and an event tag:
+
+```text
+2026-08-25 15:32:05 [START] script: /var/mobile/.../demo.bdl | type: RAW | repeat: 0 | speed: 1.0
+2026-08-25 15:32:07 [END] script finished (raw): /var/mobile/.../demo.bdl
+2026-08-25 15:40:11 [ERROR] script exited with code 1 (py): /var/mobile/.../check.bdl | output: /var/mobile/Library/ZXTouch/coreutils/ScriptRuntime/output
+```
+
+- `START` / `END` — a run began / finished normally (each replay pass logs its own pair)
+- `STOP` — the run was stopped by the user
+- `ERROR` — the script could not run or exited non-zero; for Python failures the line points at the output file containing the traceback
+
+Log files are kept for **3 days** and purged automatically on each write.
+
 ---
 
 ## Documentation (Python)
@@ -238,7 +264,7 @@ Each trigger can be set to 1-5 clicks and can run Smart Toggle, Toggle Panel, St
 
 **On your iOS device:** The ZXTouch Python module is installed automatically with the `.deb`.
 
-**On a computer (remote control):** Copy the `zxtouch` folder from [`layout/usr/lib/python3.7/site-packages`](https://github.com/xuan32546/IOS13-SimulateTouch/tree/0.0.6/layout/usr/lib/python3.7/site-packages) to your Python `site-packages` directory.
+**On a computer (remote control):** Copy the `zxtouch` folder from [`layout/usr/share/zxtouch/python`](layout/usr/share/zxtouch/python) to your Python `site-packages` directory.
 
 ### Create a ZXTouch Instance
 
@@ -246,6 +272,14 @@ Each trigger can be set to 1-5 clicks and can run Smart Toggle, Toggle Panel, St
 from zxtouch.client import zxtouch
 device = zxtouch("127.0.0.1")  # use device IP for remote control
 ```
+
+The constructor accepts an optional socket timeout (seconds, default 60):
+
+```python
+device = zxtouch("192.168.1.5", timeout=120)
+```
+
+If the device does not answer within the timeout, calls raise `socket.timeout` instead of blocking forever. Raise it for long-running shell commands; `prompt_input` extends it internally to 130s to match the on-device prompt cap.
 
 ---
 
