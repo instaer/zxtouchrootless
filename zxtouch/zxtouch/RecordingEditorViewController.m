@@ -252,9 +252,13 @@
         }];
     }
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    // The handler must not retain the alert itself (alert -> action -> block ->
+    // alert would leak the whole chain, including `self` via the completion,
+    // every time a prompt is opened — even when cancelled).
+    __weak UIAlertController *weakAlert = alert;
     [alert addAction:[UIAlertAction actionWithTitle:@"Save" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *choice) {
         NSMutableArray *values = [NSMutableArray array];
-        for (UITextField *field in alert.textFields) [values addObject:field.text ?: @""];
+        for (UITextField *field in weakAlert.textFields) [values addObject:field.text ?: @""];
         completion(values);
     }]];
     [self presentViewController:alert animated:YES completion:nil];
@@ -306,14 +310,14 @@
 - (void)tableView:(UITableView *)tableView moveRowAtIndexPath:(NSIndexPath *)sourceIndexPath toIndexPath:(NSIndexPath *)destinationIndexPath { NSMutableDictionary *action = self.actions[sourceIndexPath.row]; [self.actions removeObjectAtIndex:sourceIndexPath.row]; [self.actions insertObject:action atIndex:destinationIndexPath.row]; [self markChanged]; }
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle forRowAtIndexPath:(NSIndexPath *)indexPath { if (editingStyle == UITableViewCellEditingStyleDelete) { [self.actions removeObjectAtIndex:indexPath.row]; [tableView deleteRowsAtIndexPaths:@[indexPath] withRowAnimation:UITableViewRowAnimationAutomatic]; [self markChanged]; } }
 
-- (NSArray<UIContextualAction *> *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_AVAILABLE(ios(11.0))
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath API_AVAILABLE(ios(11.0))
 {
     UIContextualAction *duplicate = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"Duplicate" handler:^(__unused UIContextualAction *context, __unused UIView *view, void (^completion)(BOOL)) {
         [self.actions insertObject:[self.actions[indexPath.row] mutableCopy] atIndex:indexPath.row + 1];
         [self.tableView reloadData]; [self markChanged]; completion(YES);
     }];
     duplicate.backgroundColor = UIColor.systemBlueColor;
-    return @[duplicate];
+    return [UISwipeActionsConfiguration configurationWithActions:@[duplicate]];
 }
 
 - (void)setEditing:(BOOL)editing animated:(BOOL)animated
