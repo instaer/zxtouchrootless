@@ -6,11 +6,9 @@
 #include "Config.h"
 #import "ScriptPlayer.h"
 #include "Common.h"
-#import <CoreFoundation/CoreFoundation.h>
 
 static BOOL switchAppBeforeRunScript = true;
 ScriptPlayer *scriptPlayer;
-static float currentRunSpeed = 1.0f;
 
 void initScriptPlayer()
 {
@@ -75,8 +73,6 @@ int playScriptWithSettings(UInt8* path, int repeatTime, float playSpeed, float s
     // another's settings are half-applied.
     @synchronized(scriptPlayer)
     {
-        currentRunSpeed = playSpeed;
-
         [scriptPlayer setPath:[NSString stringWithFormat:@"%s", path]];
         [scriptPlayer setRepeatTime:repeatTime];
         [scriptPlayer setSpeed:playSpeed];
@@ -101,20 +97,4 @@ void stopScriptPlaying(NSError **error)
 BOOL isScriptPlaying()
 {
     return scriptPlayer && [scriptPlayer isPlaying];
-}
-
-void playHasStoppedCallBack()
-{
-    if (CFAbsoluteTimeGetCurrent() - lastAlertBoxRequestTime() < 4.0) {
-        NSLog(@"com.zjx.springboard: skipping Script Finished popup because script recently showed an alert.");
-        return;
-    }
-
-    NSString *bundlePath = [scriptPlayer getCurrentBundlePath];
-    NSString *scriptName = (bundlePath.length > 0) ? [[bundlePath lastPathComponent] stringByDeletingPathExtension] : @"Unknown";
-    int completedRuns = [scriptPlayer getCompletedRuns];
-
-    NSString *msg = [NSString stringWithFormat:@"Script: %@\nSpeed: %.1f×\nPlayed: %d time(s)",
-                     scriptName, currentRunSpeed, completedRuns];
-    showAlertBox(@"Script Finished", msg, 0);
 }

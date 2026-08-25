@@ -66,7 +66,6 @@ The built-in automation system currently supports assigning actions to Volume Up
 - **Color picker & color searcher re-enabled** — reimplemented in pure CoreGraphics
 - **OCR** working via Vision framework
 - **Volume-down stop** working for Python scripts
-- **Accurate script finished popup** — shows correct play count and script name
 - **Refreshed script browser and settings UI** — modern icons, cleaner grouping, README previews, and separate handling for Python/raw scripts
 - **Built-in automation triggers** — assign button click patterns to panel, recording, stop, or run-script actions
 - **Native script prompts** — Python scripts can request user input with `prompt_input(...)`

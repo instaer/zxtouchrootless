@@ -5,12 +5,6 @@
 
 // Dedicated window for hosting alert controllers (survives until dismissed)
 static NSMutableArray *_alertWindows = nil;
-static CFTimeInterval _lastAlertBoxRequestTime = 0;
-
-CFTimeInterval lastAlertBoxRequestTime(void)
-{
-    return _lastAlertBoxRequestTime;
-}
 
 static void appendPromptDebugLog(NSString *message)
 {
@@ -128,7 +122,6 @@ NSString *promptInputFromRawData(UInt8 *eventData, NSError **error)
 
 void showAlertBox(NSString* title, NSString* content, int dismissTime)
 {
-    _lastAlertBoxRequestTime = CFAbsoluteTimeGetCurrent();
     dispatch_async(dispatch_get_main_queue(), ^{
         if (!_alertWindows) _alertWindows = [NSMutableArray array];
 

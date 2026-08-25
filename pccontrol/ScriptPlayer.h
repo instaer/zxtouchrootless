@@ -17,7 +17,6 @@
 - (int)play:(NSError**)error;
 - (BOOL)isPlaying;
 - (NSString*)getCurrentBundlePath;
-- (int)getCompletedRuns;
 
 @end
 
