@@ -66,9 +66,14 @@
 
 -(NSString*) recv:(int)length
 {
-    char buffer[length];
-    memset(buffer, 0, sizeof(buffer));
-    recv(socketHandle, buffer, length, 0);
+    // +1 so a read that fills the buffer still leaves room for the NUL
+    // terminator — stringWithUTF8String would otherwise run past the end
+    // looking for one. Terminate explicitly at the byte count recv() reports.
+    char buffer[length + 1];
+    ssize_t received = recv(socketHandle, buffer, length, 0);
+    if (received <= 0)
+        return @"";
+    buffer[received] = '\0';
     return [NSString stringWithUTF8String:buffer];
 }
 
