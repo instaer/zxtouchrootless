@@ -40,6 +40,13 @@ static NSObject *recordStateLock(void)
 // isRecording is already false.
 static uint64_t recordGeneration = 0;
 
+// Set by the HID callback after a failed script write. Read and cleared by
+// the recording runloop, which performs the session cleanup under the record
+// lock before allowing a new start (see the @catch in
+// recordIOHIDEventCallback for why the callback must not clear isRecording
+// itself).
+static volatile bool recordWriteFailed = false;
+
 
 void startRecording(CFWriteStreamRef requestClient, NSError **error)
 {
@@ -124,6 +131,9 @@ void startRecording(CFWriteStreamRef requestClient, NSError **error)
         // below) so a concurrent start request can't slip past the check above
         // before the block has run.
         isRecording = true;
+        // Fresh session: clear any failure flag left by the previous one so
+        // the new runloop doesn't exit immediately.
+        recordWriteFailed = false;
         // Tag this session; a stop (or newer start) bumps recordGeneration.
         uint64_t generation = ++recordGeneration;
 
@@ -184,14 +194,58 @@ void startRecording(CFWriteStreamRef requestClient, NSError **error)
                 // the first slice would otherwise be missed. The generation
                 // check between slices guarantees termination no matter when
                 // the stop arrives; CFRunLoopStop (still called by
-                // stopRecording) just makes the exit immediate.
+                // stopRecording) just makes the exit immediate. recordWriteFailed
+                // is also checked: the HID callback flags it after a write
+                // failure without any stopRecording call.
                 while (true)
                 {
                     @synchronized(recordStateLock())
                     {
-                        if (generation != recordGeneration) break;
+                        if (generation != recordGeneration || recordWriteFailed) break;
                     }
                     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, false);
+                }
+
+                // Abnormal exit (write failure): stopRecording never ran for
+                // this session, so release the session resources here. After
+                // a normal stop the generation was bumped, making this a
+                // no-op — stopRecording did its own cleanup. isRecording stays
+                // true until the cleanup below finishes, so a startRecording
+                // arriving meanwhile is rejected instead of skipping this
+                // cleanup and overwriting the session globals.
+                @synchronized(recordStateLock())
+                {
+                    if (generation == recordGeneration)
+                    {
+                        // hide the indicator, same as stopRecording does
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            _recordIndicator.hidden = YES;
+                            _recordIndicator = nil;
+                        });
+
+                        if (ioHIDEventSystemForRecording)
+                        {
+                            IOHIDEventSystemClientUnregisterEventCallback(ioHIDEventSystemForRecording);
+                            IOHIDEventSystemClientUnscheduleWithRunLoop(ioHIDEventSystemForRecording,
+                                                                       recordRunLoop ?: CFRunLoopGetCurrent(),
+                                                                       kCFRunLoopDefaultMode);
+                            // Create Rule: IOHIDEventSystemClientCreate yields a
+                            // +1 reference; unregistering alone leaks the client.
+                            CFRelease(ioHIDEventSystemForRecording);
+                            ioHIDEventSystemForRecording = NULL;
+                        }
+
+                        if (scriptRecordingFileHandle)
+                        {
+                            [scriptRecordingFileHandle synchronizeFile];
+                            [scriptRecordingFileHandle closeFile];
+                            scriptRecordingFileHandle = nil;
+                        }
+
+                        recordRunLoop = NULL;
+                        recordWriteFailed = false;
+                        isRecording = false;
+                    }
                 }
             }
         });
@@ -204,7 +258,9 @@ static void recordIOHIDEventCallback(void* target, void* refcon, IOHIDServiceRef
     //NSLog(@"### com.zjx.springboard: handle_event : %d", IOHIDEventGetType(event));
     if (!scriptRecordingFileHandle)
     {
-        isRecording = false;
+        // Same rule as the write-failure path below: only flag, never clear
+        // isRecording from this callback (see the comment there).
+        recordWriteFailed = true;
 
         showAlertBox(@"Error", @"Unknown error while recording script. Recording is now stopping. Error code: 31.", 999);
         return;
@@ -213,6 +269,8 @@ static void recordIOHIDEventCallback(void* target, void* refcon, IOHIDServiceRef
     {
         NSArray *childrens = (__bridge NSArray *)IOHIDEventGetChildren(parentEvent);
 
+        @try
+        {
         for (int i = 0; i < [childrens count]; i++)
         {
             Boolean print = false;
@@ -253,6 +311,22 @@ static void recordIOHIDEventCallback(void* target, void* refcon, IOHIDServiceRef
                 lastEventTimeStampForRecording = CFAbsoluteTimeGetCurrent();
                 print = true;
             }
+        }
+        }
+        @catch (NSException *exception)
+        {
+            // A failed write (disk full / IO error) used to unwind through
+            // this C callback straight into SpringBoard's crash handler.
+            // Only flag the failure here — do NOT touch isRecording: setting
+            // it false would let a new startRecording slip in (bumping
+            // recordGeneration) before this session's cleanup below has run,
+            // and the cleanup would then be skipped entirely. The recording
+            // runloop sees the flag, performs the cleanup under the record
+            // lock and only then clears isRecording.
+            NSLog(@"com.zjx.springboard: recording write failed: %@", exception.reason);
+            recordWriteFailed = true;
+            showAlertBox(@"Error", @"Recording stopped because writing the script file failed (disk full or IO error).", 999);
+            return;
         }
         /*
 		if (senderID == 0)
@@ -295,6 +369,9 @@ void stopRecording()
             IOHIDEventSystemClientUnscheduleWithRunLoop(ioHIDEventSystemForRecording,
                                                        recordRunLoop ?: CFRunLoopGetCurrent(),
                                                        kCFRunLoopDefaultMode);
+            // Create Rule: IOHIDEventSystemClientCreate yields a +1 reference;
+            // unregistering alone leaks the client.
+            CFRelease(ioHIDEventSystemForRecording);
 
             ioHIDEventSystemForRecording = NULL;
         }

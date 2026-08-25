@@ -60,15 +60,22 @@
 
 - (IBAction)playButtonClick:(id)sender {
     Socket *springBoardSocket = [[Socket alloc] init];
-    [springBoardSocket connect:@"127.0.0.1" byPort:6000];
-    
+    if ([springBoardSocket connect:@"127.0.0.1" byPort:6000] != 0)
+    {
+        [Util showAlertBoxWithOneOption:_parentViewController title:@"Error" message:@"Cannot play script. ZXTouch service is unavailable." buttonString:@"OK"];
+        return;
+    }
+
     [springBoardSocket send:[NSString stringWithFormat:@"19%@\r\n", filePath]];
     NSString* result = [springBoardSocket recv:1024];
-    if ([result characterAtIndex:0] != '0')
-    {
-        [Util showAlertBoxWithOneOption:_parentViewController title:@"Error" message:[NSString stringWithFormat:@"Cannot play script. Error: %@", result] buttonString:@"OK"];
-    }
     [springBoardSocket close];
+    // recv may return an empty string (connection dropped, no reply) —
+    // indexing character 0 unconditionally crashed the app in that case.
+    if (result.length == 0 || [result characterAtIndex:0] != '0')
+    {
+        NSString *detail = result.length > 0 ? result : @"no response from ZXTouch service";
+        [Util showAlertBoxWithOneOption:_parentViewController title:@"Error" message:[NSString stringWithFormat:@"Cannot play script. Error: %@", detail] buttonString:@"OK"];
+    }
 }
 
 - (void)setSelected:(BOOL)selected animated:(BOOL)animated {

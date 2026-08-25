@@ -9,6 +9,7 @@
 #include "Common.h"
 #import <sys/stat.h>
 #include <errno.h>
+#include <stdlib.h>
 
 static BOOL isPlaying = false;
 
@@ -325,12 +326,14 @@ static NSString *ZXPythonModulePath(void)
         return;
     }
     
-    char buffer[256];
-    int taskType;
-    int sleepTime;
-    
+    // getline() grows the buffer as needed. The previous fixed 256-byte
+    // fgets() buffer silently split longer lines (e.g. long toast texts in
+    // hand-written scripts) into two malformed commands.
+    char *buffer = NULL;
+    size_t bufferCapacity = 0;
+
     BOOL stoppedByUser = NO;
-    while (fgets(buffer, sizeof(char)*256, file) != NULL)
+    while (getline(&buffer, &bufferCapacity, file) != -1)
     {
         if (scriptPlayForceStop)
         {
@@ -360,6 +363,7 @@ static NSString *ZXPythonModulePath(void)
         }
 
     }
+    free(buffer);
     fclose(file);
 
     if (stoppedByUser)

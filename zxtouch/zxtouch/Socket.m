@@ -35,12 +35,14 @@
     if(inet_pton(AF_INET, [ip UTF8String], &serv_addr.sin_addr)<=0)
     {
         NSLog(@"### com.zjx.zxtouchb: Invalid address. Address not supported");
+        close(sock); // socketHandle is only set on success, so dealloc can't close this FD
         return -1;
     }
 
     if (connect(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0)
     {
         NSLog(@"### com.zjx.zxtouchb: \nConnection Failed \n");
+        close(sock); // ditto — repeated taps on Play with the service dead leaked one FD each
         return -1;
     }
     socketHandle = sock;
@@ -64,9 +66,14 @@
 
 -(NSString*) recv:(int)length
 {
-    char buffer[length];
-    memset(buffer, 0, sizeof(buffer));
-    recv(socketHandle, buffer, length, 0);
+    // +1 so a read that fills the buffer still leaves room for the NUL
+    // terminator — stringWithUTF8String would otherwise run past the end
+    // looking for one. Terminate explicitly at the byte count recv() reports.
+    char buffer[length + 1];
+    ssize_t received = recv(socketHandle, buffer, length, 0);
+    if (received <= 0)
+        return @"";
+    buffer[received] = '\0';
     return [NSString stringWithUTF8String:buffer];
 }
 
