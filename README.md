@@ -32,6 +32,8 @@ This fork has been actively revived for modern rootless jailbreaks. Recent relea
 - Stopping a Python script now terminates its complete process group without leaving a runaway shell or logger
 - Script execution logging — every script start/stop/error is written to daily rolling logs under `/var/mobile/Library/ZXTouch/logs/` (3-day retention)
 - Major stability fixes: socket command framing (TCP packet merging/splitting), connection FD leaks, start/stop race conditions in recording and playback, memory-safety bounds checks on touch events
+- Fixed the recording editor crash when tapping Save or Cancel in a timeline item's edit alert
+- No more "Script Finished" popup after a run — script completion is recorded in the execution logs instead
 
 The built-in automation system currently supports assigning actions to Volume Up, Volume Down, and Home button click patterns. Each trigger can use 1-5 clicks and can run one of these actions:
 
