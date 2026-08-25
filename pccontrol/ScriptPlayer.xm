@@ -234,6 +234,15 @@ static NSString *ZXPythonModulePath(void)
     NSString *foregroundApp = scriptInfo[@"FrontApp"];
     // call different functions depending on file extension
 
+    if (![fileExtension isEqualToString:@"raw"] && ![fileExtension isEqualToString:@"py"])
+    {
+        // Nothing would play, so no indicator, no isPlaying, and no END event
+        // would ever be logged. Reject before any state is touched.
+        logScriptEvent(@"ERROR", @"cannot run script '%@': unsupported entry type '%@'", scriptBundlePath, fileExtension);
+        *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to run the script. Unsupported entry file type.\r\n"}];
+        return -1;
+    }
+
     // show indicator
     dispatch_async(dispatch_get_main_queue(), ^{
         _playIndicator = [[UIWindow alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
@@ -255,6 +264,14 @@ static NSString *ZXPythonModulePath(void)
     logScriptEvent(@"START", @"script: %@ | type: %@ | repeat: %d | speed: %.1f",
                    scriptBundlePath, fileExtension.uppercaseString, repeatTime, speed);
 
+    // Mark playing synchronously, BEFORE dispatching. Callers hold the
+    // scriptPlayer lock (Play.xm), so once this is set a second play() fails
+    // its isPlaying check immediately instead of passing it while the first
+    // run is still queued — both runs used to start concurrently sharing
+    // scriptBundlePath/speed/repeatTime/pythonProcessGroup. The async
+    // functions below no longer set it on entry; they only clear it on
+    // failure or completion.
+    isPlaying = true;
 
     if ([fileExtension isEqualToString:@"raw"])
     {
@@ -264,21 +281,16 @@ static NSString *ZXPythonModulePath(void)
             [self playFromRawFile:entryFilePath foregroundApp:foregroundApp err:&err];
         });
     }
-    else if ([fileExtension isEqualToString:@"py"])
+    else // "py" — validated above
     {
         currentScriptType = 2;
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
             NSError *err = nil;
             [self playFromPythonFile:entryFilePath foregroundApp:foregroundApp err:&err];
         });
+    }
 
-    }
-    else
-    {
-        // Neither branch above ran, so nothing will play and no END event
-        // would ever be logged. Record the failure so it is visible.
-        logScriptEvent(@"ERROR", @"cannot run script '%@': unsupported entry type '%@'", scriptBundlePath, fileExtension);
-    }
+    return 0;
 }
 
 // play the script
@@ -291,13 +303,13 @@ static NSString *ZXPythonModulePath(void)
         return -1;
     }
     _completedRuns = 0;
-    [self runScript:error];
+    return [self runScript:error];
 }
 
 
 -(void)playFromRawFile:(NSString*) filePath foregroundApp:(NSString*)foregroundApp err:(NSError**)err
 {
-    isPlaying = true;
+    // isPlaying was already set synchronously by runScript: before dispatch.
     if (switchAppBeforePlaying)
     {
         bringAppForeground(foregroundApp);
@@ -364,7 +376,7 @@ static NSString *ZXPythonModulePath(void)
 
 -(void) playFromPythonFile:(NSString*) filePath foregroundApp:(NSString*) foregroundApp err:(NSError**) err
 {
-    isPlaying = true;
+    // isPlaying was already set synchronously by runScript: before dispatch.
 
     if (switchAppBeforePlaying)
     {
@@ -473,7 +485,13 @@ static NSString *ZXPythonModulePath(void)
     NSLog(@"com.zjx.springboard: script is replaying...");
     NSError *err = nil;
 
-    [self runScript:&err];
+    // Take the same lock Play.xm uses for start/stop so the synchronous
+    // isPlaying = true inside runScript: is not racing a concurrent
+    // forceStop/play from another thread.
+    @synchronized(self)
+    {
+        [self runScript:&err];
+    }
 
     CFRunLoopStop(CFRunLoopGetCurrent());
 }

@@ -32,6 +32,14 @@ static NSObject *recordStateLock(void)
     return lock;
 }
 
+// Generation of the current (or most recent) recording session, guarded by
+// recordStateLock(). startRecording captures the generation it starts under;
+// stopRecording (and any subsequent start) bumps it, which lets the async
+// initialization block and the recording runloop detect that they were
+// canceled and abort instead of becoming a "ghost recording" that runs while
+// isRecording is already false.
+static uint64_t recordGeneration = 0;
+
 
 void startRecording(CFWriteStreamRef requestClient, NSError **error)
 {
@@ -116,42 +124,76 @@ void startRecording(CFWriteStreamRef requestClient, NSError **error)
         // below) so a concurrent start request can't slip past the check above
         // before the block has run.
         isRecording = true;
+        // Tag this session; a stop (or newer start) bumps recordGeneration.
+        uint64_t generation = ++recordGeneration;
 
         dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+            @autoreleasepool {
+                // start recording
+                NSLog(@"com.zjx.springboard: start recording.");
 
-            // start recording
-            NSLog(@"com.zjx.springboard: start recording.");
+                // Initialize everything under the lock so stopRecording either
+                // sees nothing to clean up (block aborted below) or a fully
+                // initialized session — never a half-initialized one.
+                @synchronized(recordStateLock())
+                {
+                    // A stop arrived while this block sat in the queue:
+                    // abort instead of resurrecting a recording session.
+                    if (generation != recordGeneration) return;
 
-            // show indicator
-            dispatch_async(dispatch_get_main_queue(), ^{
-                _recordIndicator = [[UIWindow alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
-                _recordIndicator.windowLevel = UIWindowLevelStatusBar;
-                _recordIndicator.hidden = NO;
-                [_recordIndicator setBackgroundColor:[UIColor clearColor]];
-                [_recordIndicator setUserInteractionEnabled:NO];
+                    scriptRecordingFileHandle = [NSFileHandle fileHandleForWritingAtPath:rawFilePath];
 
-                UIView *circleView = [[UIView alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
+                    // get time stamp
+                    lastEventTimeStampForRecording = CFAbsoluteTimeGetCurrent();
 
-                //circleView.alpha = 1;
-                circleView.layer.cornerRadius = 10;  // half the width/height
-                circleView.backgroundColor = [UIColor redColor];
-                [_recordIndicator addSubview:circleView];
-            });
+                    // start watching function
+                    ioHIDEventSystemForRecording = IOHIDEventSystemClientCreate(kCFAllocatorDefault);
 
-            scriptRecordingFileHandle = [NSFileHandle fileHandleForWritingAtPath:rawFilePath];
+                    IOHIDEventSystemClientScheduleWithRunLoop(ioHIDEventSystemForRecording, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+                    IOHIDEventSystemClientRegisterEventCallback(ioHIDEventSystemForRecording, (IOHIDEventSystemClientEventCallback)recordIOHIDEventCallback, NULL, NULL);
 
-            // get time stamp
-            lastEventTimeStampForRecording = CFAbsoluteTimeGetCurrent();
+                    recordRunLoop = CFRunLoopGetCurrent();
+                }
 
-            // start watching function
-            ioHIDEventSystemForRecording = IOHIDEventSystemClientCreate(kCFAllocatorDefault);
+                // Show the indicator only if this session is still current —
+                // re-check under the lock so a red dot can't reappear after a
+                // stop that already hid it.
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    @synchronized(recordStateLock())
+                    {
+                        if (generation != recordGeneration) return;
 
-            IOHIDEventSystemClientScheduleWithRunLoop(ioHIDEventSystemForRecording, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
-            IOHIDEventSystemClientRegisterEventCallback(ioHIDEventSystemForRecording, (IOHIDEventSystemClientEventCallback)recordIOHIDEventCallback, NULL, NULL);
+                        _recordIndicator = [[UIWindow alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
+                        _recordIndicator.windowLevel = UIWindowLevelStatusBar;
+                        _recordIndicator.hidden = NO;
+                        [_recordIndicator setBackgroundColor:[UIColor clearColor]];
+                        [_recordIndicator setUserInteractionEnabled:NO];
 
+                        UIView *circleView = [[UIView alloc] initWithFrame:CGRectMake(0,0,10*2,10*2)];
 
-            recordRunLoop = CFRunLoopGetCurrent();
-            CFRunLoopRun();
+                        //circleView.alpha = 1;
+                        circleView.layer.cornerRadius = 10;  // half the width/height
+                        circleView.backgroundColor = [UIColor redColor];
+                        [_recordIndicator addSubview:circleView];
+                    }
+                });
+
+                // Run in short slices instead of one open-ended CFRunLoopRun():
+                // CFRunLoopStop() is a no-op on a runloop that has not started
+                // yet, so a stop landing in the gap between initialization and
+                // the first slice would otherwise be missed. The generation
+                // check between slices guarantees termination no matter when
+                // the stop arrives; CFRunLoopStop (still called by
+                // stopRecording) just makes the exit immediate.
+                while (true)
+                {
+                    @synchronized(recordStateLock())
+                    {
+                        if (generation != recordGeneration) break;
+                    }
+                    CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, false);
+                }
+            }
         });
     }
 }
@@ -233,6 +275,10 @@ void stopRecording()
 
     @synchronized(recordStateLock())
     {
+        // Invalidate the current session first: any start block still sitting
+        // in a queue (or between runloop slices) sees the bump and aborts.
+        recordGeneration++;
+
         // remove indicator
         dispatch_async(dispatch_get_main_queue(), ^{
             _recordIndicator.hidden = YES;
@@ -243,7 +289,12 @@ void stopRecording()
         if (ioHIDEventSystemForRecording)
         {
             IOHIDEventSystemClientUnregisterEventCallback(ioHIDEventSystemForRecording);
-            IOHIDEventSystemClientUnscheduleWithRunLoop(ioHIDEventSystemForRecording, CFRunLoopGetCurrent(), kCFRunLoopDefaultMode);
+            // Unschedule from the runloop the client was actually scheduled on
+            // (the recording runloop). CFRunLoopGetCurrent() here is the
+            // calling thread's runloop, which the client was never attached to.
+            IOHIDEventSystemClientUnscheduleWithRunLoop(ioHIDEventSystemForRecording,
+                                                       recordRunLoop ?: CFRunLoopGetCurrent(),
+                                                       kCFRunLoopDefaultMode);
 
             ioHIDEventSystemForRecording = NULL;
         }
