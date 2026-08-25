@@ -109,15 +109,10 @@ static NSString *ZXPythonModulePath(void)
     volatile sig_atomic_t scriptStopRequested;
     pid_t pythonProcessGroup;
     Boolean switchAppBeforePlaying;
-    int _completedRuns;
 }
 
 - (BOOL)isPlaying {
     return isPlaying;
-}
-
-- (int)getCompletedRuns {
-    return _completedRuns;
 }
 
 - (NSString*)getCurrentBundlePath {
@@ -303,7 +298,6 @@ static NSString *ZXPythonModulePath(void)
         *error = [NSError errorWithDomain:@"com.zjx.zxtouchsp" code:999 userInfo:@{NSLocalizedDescriptionKey:@"-1;;Unable to run the script. Another script is currently running.\r\n"}];
         return -1;
     }
-    _completedRuns = 0;
     return [self runScript:error];
 }
 
@@ -502,11 +496,10 @@ static NSString *ZXPythonModulePath(void)
 
 -(void) playHasStopped
 {
-    // If forceStop already called clear(), isPlaying is false — don't show finished popup
+    // If forceStop already called clear(), isPlaying is false — nothing to do
     if (!isPlaying) return;
 
     NSLog(@"com.zjx.springboard: script has finished");
-    _completedRuns++;
 
     // check whether need to replay
     if (repeatTime != 0)
@@ -528,12 +521,8 @@ static NSString *ZXPythonModulePath(void)
     }
     else
     {
-        playHasStoppedCallBack();
         [self clear];
     }
-
-
-
 }
 
 - (void)clear {
