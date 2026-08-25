@@ -13,8 +13,11 @@ def decode_socket_data(data):
     :param data: socket data
     :return: a tuple. (success?, error message)
     """
+    # Guard against an empty payload (connection closed or timed out before
+    # the server answered) — indexing data[0] below used to raise IndexError.
+    if not data:
+        return (False, "no data received: connection closed or timed out")
     data = str(data.decode())
-    data.replace("\r\n", "")
 
     temp = data.split(";;")
     temp[-1] = temp[-1].replace("\r\n", "")

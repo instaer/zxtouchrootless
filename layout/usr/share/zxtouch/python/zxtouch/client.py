@@ -8,8 +8,17 @@ from zxtouch import colorsearchtasktypes
 
 
 class zxtouch:
-    def __init__(self, ip):
+    def __init__(self, ip, timeout=60):
+        """Connect to the zxtouch tweak on a device
+
+        :param ip: ip address of the device
+        :param timeout: socket timeout in seconds. Without one, a hung or
+            unreachable device blocks every recv() forever. 60s covers most
+            commands; pass a larger value when running shell commands or
+            sleeps that take longer than a minute.
+        """
         self.s = socket.socket()
+        self.s.settimeout(timeout)
         self.s.connect((str(ip), 6000))
         time.sleep(0.1)
 
@@ -88,8 +97,15 @@ class zxtouch:
         Returns:
             Result tuple: (success?, entered_text/error_message)
         """
-        self.s.send(datahandler.format_socket_data(tasktypes.TASK_PROMPT_INPUT, title, message, placeholder, default_value))
-        result = datahandler.decode_socket_data(self.s.recv(2048))
+        # The on-device prompt can wait up to 120s for the user; extend the
+        # socket timeout for this call so it doesn't fire early.
+        previous_timeout = self.s.gettimeout()
+        self.s.settimeout(max(previous_timeout or 0, 130))
+        try:
+            self.s.send(datahandler.format_socket_data(tasktypes.TASK_PROMPT_INPUT, title, message, placeholder, default_value))
+            result = datahandler.decode_socket_data(self.s.recv(2048))
+        finally:
+            self.s.settimeout(previous_timeout)
         if not result[0]:
             return False, result[1]
         return True, result[1][0] if len(result[1]) else ""

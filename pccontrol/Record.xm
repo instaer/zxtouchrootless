@@ -184,14 +184,50 @@ void startRecording(CFWriteStreamRef requestClient, NSError **error)
                 // the first slice would otherwise be missed. The generation
                 // check between slices guarantees termination no matter when
                 // the stop arrives; CFRunLoopStop (still called by
-                // stopRecording) just makes the exit immediate.
+                // stopRecording) just makes the exit immediate. isRecording is
+                // also checked: the HID callback flips it off after a write
+                // failure without any stopRecording call.
                 while (true)
                 {
                     @synchronized(recordStateLock())
                     {
-                        if (generation != recordGeneration) break;
+                        if (generation != recordGeneration || !isRecording) break;
                     }
                     CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.1, false);
+                }
+
+                // Abnormal exit (write failure): stopRecording never ran for
+                // this session, so release the session resources here. After
+                // a normal stop the generation was bumped, making this a
+                // no-op — stopRecording did its own cleanup.
+                @synchronized(recordStateLock())
+                {
+                    if (generation == recordGeneration)
+                    {
+                        // hide the indicator, same as stopRecording does
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            _recordIndicator.hidden = YES;
+                            _recordIndicator = nil;
+                        });
+
+                        if (ioHIDEventSystemForRecording)
+                        {
+                            IOHIDEventSystemClientUnregisterEventCallback(ioHIDEventSystemForRecording);
+                            IOHIDEventSystemClientUnscheduleWithRunLoop(ioHIDEventSystemForRecording,
+                                                                       recordRunLoop ?: CFRunLoopGetCurrent(),
+                                                                       kCFRunLoopDefaultMode);
+                            ioHIDEventSystemForRecording = NULL;
+                        }
+
+                        if (scriptRecordingFileHandle)
+                        {
+                            [scriptRecordingFileHandle synchronizeFile];
+                            [scriptRecordingFileHandle closeFile];
+                            scriptRecordingFileHandle = nil;
+                        }
+
+                        recordRunLoop = NULL;
+                    }
                 }
             }
         });
@@ -213,6 +249,8 @@ static void recordIOHIDEventCallback(void* target, void* refcon, IOHIDServiceRef
     {
         NSArray *childrens = (__bridge NSArray *)IOHIDEventGetChildren(parentEvent);
 
+        @try
+        {
         for (int i = 0; i < [childrens count]; i++)
         {
             Boolean print = false;
@@ -253,6 +291,21 @@ static void recordIOHIDEventCallback(void* target, void* refcon, IOHIDServiceRef
                 lastEventTimeStampForRecording = CFAbsoluteTimeGetCurrent();
                 print = true;
             }
+        }
+        }
+        @catch (NSException *exception)
+        {
+            // A failed write (disk full / IO error) used to unwind through
+            // this C callback straight into SpringBoard's crash handler.
+            // Flag the failure and let the recording runloop exit on its
+            // next slice, where the session resources are released. No locks
+            // here: this callback can run while stopRecording holds the
+            // record lock, and taking it could deadlock against HID
+            // unregister.
+            NSLog(@"com.zjx.springboard: recording write failed: %@", exception.reason);
+            isRecording = false;
+            showAlertBox(@"Error", @"Recording stopped because writing the script file failed (disk full or IO error).", 999);
+            return;
         }
         /*
 		if (senderID == 0)
